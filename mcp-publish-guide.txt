@@ -1,0 +1,507 @@
+LANROSTER — MCP PUBLICATION GUIDE
+===================================
+Step-by-step instructions for publishing lanroster as a public MCP server.
+Complete mcp-enhancement.txt first. This guide starts where that one ends.
+
+Maintainer: Abel Moreno <abelmqueralto@gmail.com>
+Repository: https://github.com/amq84/lanroster
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 0 — PREREQUISITES (complete before any publishing step)
+═══════════════════════════════════════════════════════════════
+
+These must all be true before publishing to any channel.
+
+[ ] 1. MCP server is implemented and tested (see mcp-enhancement.txt)
+        lanroster-mcp runs without errors
+        echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | lanroster-mcp
+        returns a valid JSON response listing 6 tools
+
+[ ] 2. Version bumped to 0.3.0 in:
+        lanroster/__init__.py  → __version__ = "0.3.0"
+        pyproject.toml         → version = "0.3.0"   (see Phase 1)
+
+[ ] 3. setup.py replaced with pyproject.toml (see Phase 1)
+
+[ ] 4. macOS ARP parsing verified
+        On macOS, `arp -n` output format differs from Linux.
+        In lanroster/network.py, _read_arp_table() must handle both.
+        Linux line: "192.168.1.1  0x1  0x2  aa:bb:cc:dd:ee:ff  *  eth0"
+        macOS line: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]"
+        Add a macOS branch before the arp -n fallback block:
+          import platform, re
+          if platform.system() == "Darwin":
+              # parse macOS arp -a output
+              out = subprocess.check_output(["arp", "-a"], ...)
+              for line in out.splitlines():
+                  m = re.search(r'\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-f:]{17})', line)
+                  if m:
+                      results.append((m.group(1), m.group(2)))
+
+[ ] 5. README MCP section exists (added during mcp-enhancement.txt session)
+
+[ ] 6. All changes committed and pushed to origin/main
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 1 — MIGRATE TO pyproject.toml
+═══════════════════════════════════════════════════════════════
+
+PyPI and modern tooling expect pyproject.toml. Replace setup.py with it.
+
+---
+
+ACTION: Create ~/lanroster/pyproject.toml with this exact content:
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lanroster"
+version = "0.3.0"
+description = "Git-backed CLI and MCP server for network device roster management"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Abel Moreno", email = "abelmqueralto@gmail.com" }]
+keywords = ["network", "mcp", "homelab", "arp", "device-management", "claude"]
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "netifaces>=0.11",
+]
+classifiers = [
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Networking",
+    "Topic :: System :: Systems Administration",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+]
+
+[project.optional-dependencies]
+vendor = ["mac-vendor-lookup>=0.1.12"]
+scan   = ["scapy>=2.5"]
+mcp    = ["mcp>=1.0"]
+full   = ["mac-vendor-lookup>=0.1.12", "scapy>=2.5", "mcp>=1.0"]
+
+[project.scripts]
+lanroster     = "lanroster.cli:main"
+lanroster-mcp = "lanroster.mcp_server:serve"
+
+[project.urls]
+Homepage   = "https://github.com/amq84/lanroster"
+Repository = "https://github.com/amq84/lanroster"
+Issues     = "https://github.com/amq84/lanroster/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lanroster*"]
+
+---
+
+ACTION: Delete setup.py (it conflicts with pyproject.toml)
+  git rm setup.py
+
+ACTION: Test the new config locally
+  pip install -e ".[mcp,vendor]"
+  lanroster --version         # should print 0.3.0
+  lanroster-mcp               # should block waiting for stdio input (Ctrl+C to exit)
+
+ACTION: Commit
+  git add pyproject.toml
+  git rm setup.py
+  git commit -m "Migrate to pyproject.toml, bump version to 0.3.0"
+  git push
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 2 — ADD GITHUB ACTIONS CI/CD
+═══════════════════════════════════════════════════════════════
+
+This automates PyPI publishing on every version tag (v0.3.0, v1.0.0, etc.)
+so you never have to publish manually again.
+
+---
+
+ACTION: Create .github/workflows/publish.yml
+
+mkdir -p ~/lanroster/.github/workflows
+
+File content:
+
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for trusted publishing (no API key needed)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          pip install build
+          python -m build
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+---
+
+ACTION: Also create .github/workflows/ci.yml for tests on every push:
+
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[mcp,vendor]"
+      - name: Smoke test CLI
+        run: |
+          lanroster --version
+          lanroster --help
+      - name: Smoke test MCP import
+        run: python -c "from lanroster.mcp_server import serve; print('MCP server OK')"
+
+---
+
+ACTION: Commit
+  git add .github/
+  git commit -m "Add GitHub Actions CI and PyPI publish workflow"
+  git push
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 3 — PUBLISH TO PyPI
+═══════════════════════════════════════════════════════════════
+
+PyPI is the primary distribution channel. Once published, users install with:
+  pip install "lanroster[mcp]"
+
+STEP 1 — Create a PyPI account (if you don't have one)
+  URL: https://pypi.org/account/register/
+  Use email: abelmqueralto@gmail.com
+  Enable 2FA (required for publishing)
+
+STEP 2 — Set up Trusted Publishing on PyPI (no API keys needed)
+  This links your PyPI project to your GitHub repo so the Actions workflow
+  can publish without storing secrets.
+
+  a. Go to https://pypi.org/manage/account/publishing/
+  b. Click "Add a new pending publisher"
+  c. Fill in:
+       PyPI Project Name:  lanroster
+       Owner:              amq84
+       Repository:         lanroster
+       Workflow name:      publish.yml
+       Environment name:   pypi
+  d. Save.
+
+STEP 3 — Check the package name is available
+  pip index versions lanroster 2>&1 | grep "not found"
+  If it returns results, the name is taken — you would need to use
+  "lanroster-mcp" or "lan-roster" instead, and update pyproject.toml.
+
+STEP 4 — Do a dry-run on TestPyPI first
+  pip install build twine
+  python -m build
+  twine upload --repository testpypi dist/*
+  pip install --index-url https://test.pypi.org/simple/ "lanroster[mcp]"
+  lanroster --version
+  If everything works, proceed to step 5.
+  TestPyPI account: https://test.pypi.org/account/register/
+
+STEP 5 — Publish via git tag (triggers the GitHub Action)
+  git tag v0.3.0
+  git push origin v0.3.0
+
+  Monitor at: https://github.com/amq84/lanroster/actions
+  Package appears at: https://pypi.org/project/lanroster/ within ~2 minutes.
+
+STEP 6 — Verify the published package
+  pip install "lanroster[mcp]"
+  lanroster --version    # 0.3.0
+  lanroster-mcp          # starts, waiting for input
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 4 — SUBMIT TO modelcontextprotocol/servers (HIGHEST VALUE)
+═══════════════════════════════════════════════════════════════
+
+This is the official Anthropic-maintained MCP server registry. Getting listed
+here reaches every Claude Desktop power user. It is the most valuable single
+action for discoverability.
+
+URL: https://github.com/modelcontextprotocol/servers
+
+STEP 1 — Fork the repository
+  Go to https://github.com/modelcontextprotocol/servers
+  Click Fork → Create fork under amq84
+
+STEP 2 — Clone your fork
+  git clone git@github.com:amq84/servers.git /tmp/mcp-servers
+  cd /tmp/mcp-servers
+
+STEP 3 — Find the correct section in README.md
+  Open README.md and locate the "Community Servers" section.
+  Within it, find the subsection for infrastructure/networking tools,
+  or add a new "🌐 Networking" heading if one doesn't exist.
+
+STEP 4 — Add the lanroster entry
+  Format follows existing entries. Add this line in alphabetical order
+  within the appropriate section:
+
+  - **[lanroster](https://github.com/amq84/lanroster)** - 🌐 Network device
+    roster manager. MAC-based device identity, git-backed shared registry,
+    ARP/nmap discovery. `pip install "lanroster[mcp]"` — by [@amq84](https://github.com/amq84)
+
+STEP 5 — Commit and push to your fork
+  git add README.md
+  git commit -m "Add lanroster: network device roster MCP server"
+  git push origin main
+
+STEP 6 — Open a Pull Request
+  Go to https://github.com/modelcontextprotocol/servers/pulls
+  Click "New pull request" → compare across forks
+  Base: modelcontextprotocol/servers main
+  Head: amq84/servers main
+
+  PR title:   Add lanroster — network device roster MCP server
+  PR body:
+    ## lanroster
+
+    A git-backed CLI and MCP server for managing and monitoring network
+    device rosters.
+
+    **What it does:**
+    - Exposes 6 MCP tools: list_devices, get_network_status, get_device_ip,
+      register_device, remove_device, find_unknown_devices
+    - MAC-based device identity (stable across DHCP renewals)
+    - Shared device registry via git (pull/push on register/remove)
+    - ARP/nmap network discovery with 60s scan cache
+
+    **Install:** `pip install "lanroster[mcp]"`
+    **Config:**
+    ```json
+    { "mcpServers": { "lanroster": { "command": "lanroster-mcp" } } }
+    ```
+
+    **GitHub:** https://github.com/amq84/lanroster
+    **PyPI:** https://pypi.org/project/lanroster/
+    **License:** MIT
+
+STEP 7 — Respond to review feedback promptly
+  Maintainers typically review within a few days. Common requests:
+  - Demo GIF or screenshot
+  - More specific description
+  - Confirm the package is published on PyPI (must be done before PR)
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 5 — ADD smithery.yaml AND SUBMIT TO SMITHERY
+═══════════════════════════════════════════════════════════════
+
+Smithery (smithery.ai) is a third-party MCP marketplace with a web UI.
+It reaches users who discover tools by browsing rather than reading GitHub.
+
+STEP 1 — Create ~/lanroster/smithery.yaml
+
+File content:
+
+name: lanroster
+displayName: LanRoster — Network Device Roster
+description: >
+  Manage and monitor your LAN device roster. Resolves device names to
+  current IP addresses, scans for online/offline status, registers new
+  devices via git, and detects unknown hosts. Designed for homelabs and
+  small teams.
+version: "0.3.0"
+license: MIT
+author:
+  name: Abel Moreno
+  email: abelmqueralto@gmail.com
+  url: https://github.com/amq84
+repository: https://github.com/amq84/lanroster
+categories:
+  - networking
+  - infrastructure
+  - homelab
+  - devops
+tags:
+  - network
+  - arp
+  - lan
+  - device-management
+  - git
+  - homelab
+runtime: python
+install:
+  pip: "lanroster[mcp]"
+command: lanroster-mcp
+transport: stdio
+tools:
+  - name: list_devices
+    description: Return all registered devices from the roster
+  - name: get_network_status
+    description: Scan the network and show online/offline status for each device
+  - name: get_device_ip
+    description: Resolve a device name to its current IP address
+  - name: register_device
+    description: Add a new device to the shared roster
+  - name: remove_device
+    description: Remove a device from the roster
+  - name: find_unknown_devices
+    description: Detect devices on the LAN not registered in the roster
+
+---
+
+STEP 2 — Commit smithery.yaml
+  git add smithery.yaml
+  git commit -m "Add smithery.yaml for Smithery MCP marketplace"
+  git push
+
+STEP 3 — Submit to Smithery
+  Go to https://smithery.ai
+  Create an account (or sign in with GitHub)
+  Click "Submit a Server" or "Add MCP Server"
+  Enter the GitHub repo URL: https://github.com/amq84/lanroster
+  Smithery reads smithery.yaml automatically.
+  Fill in any additional fields the submission form requests.
+  Submit for review.
+
+
+═══════════════════════════════════════════════════════════════
+PHASE 6 — OPTIONAL: ADDITIONAL DISCOVERY CHANNELS
+═══════════════════════════════════════════════════════════════
+
+These are lower priority but take less than 10 minutes each.
+
+--- Glama.ai ---
+URL: https://glama.ai/mcp/servers
+Another MCP directory. Submit via their web form.
+Paste the GitHub URL. No special config file needed.
+
+--- awesome-mcp-servers (GitHub) ---
+Search GitHub for "awesome-mcp-servers" or "awesome-mcp".
+Several community-maintained lists accept PRs.
+Add a one-line entry in the networking/infrastructure section.
+Format: `- [lanroster](https://github.com/amq84/lanroster) - Network device roster manager with git-backed registry and ARP discovery.`
+
+--- GitHub repository topics ---
+Add topics to the GitHub repo for organic discoverability.
+Go to https://github.com/amq84/lanroster → click the gear icon next to "About"
+Add topics: mcp, mcp-server, network, homelab, arp, lan, device-management,
+            claude, anthropic, model-context-protocol
+
+--- Reddit ---
+Post in r/selfhosted and r/homelab after the tool is published.
+Title: "lanroster: MCP server for network device discovery — give Claude awareness of your homelab"
+These communities overlap heavily with the target audience.
+
+
+═══════════════════════════════════════════════════════════════
+PUBLICATION CHECKLIST (print and tick off)
+═══════════════════════════════════════════════════════════════
+
+PHASE 0 — Prerequisites
+  [ ] MCP server implemented and tested
+  [ ] Version bumped to 0.3.0 everywhere
+  [ ] macOS ARP parsing fixed
+  [ ] All changes on main
+
+PHASE 1 — pyproject.toml
+  [ ] pyproject.toml created
+  [ ] setup.py deleted
+  [ ] pip install -e ".[mcp]" works
+  [ ] committed and pushed
+
+PHASE 2 — CI/CD
+  [ ] .github/workflows/publish.yml created
+  [ ] .github/workflows/ci.yml created
+  [ ] committed and pushed
+
+PHASE 3 — PyPI
+  [ ] PyPI account created
+  [ ] Trusted publishing configured
+  [ ] Name availability confirmed
+  [ ] TestPyPI dry-run passed
+  [ ] v0.3.0 tag pushed
+  [ ] Package live at pypi.org/project/lanroster
+
+PHASE 4 — modelcontextprotocol/servers
+  [ ] Repo forked
+  [ ] Entry added to README.md
+  [ ] PR opened
+  [ ] PR merged
+
+PHASE 5 — Smithery
+  [ ] smithery.yaml committed and pushed
+  [ ] Submitted to smithery.ai
+  [ ] Listed
+
+PHASE 6 — Optional
+  [ ] Submitted to glama.ai
+  [ ] PR to awesome-mcp-servers
+  [ ] GitHub topics added
+  [ ] Reddit post in r/selfhosted
+
+
+═══════════════════════════════════════════════════════════════
+ESTIMATED TIME PER PHASE
+═══════════════════════════════════════════════════════════════
+
+Phase 0  Prerequisites        depends on mcp-enhancement.txt session
+Phase 1  pyproject.toml       30 minutes
+Phase 2  CI/CD                20 minutes
+Phase 3  PyPI                 45 minutes (mostly waiting for review/publishing)
+Phase 4  MCP registry PR      30 minutes (review may take 1–7 days)
+Phase 5  Smithery             15 minutes
+Phase 6  Optional channels    30 minutes total
+
+Total active work: ~3 hours across multiple sessions.
+The modelcontextprotocol/servers PR is the only step with external latency.
+
+
+═══════════════════════════════════════════════════════════════
+NOTES
+═══════════════════════════════════════════════════════════════
+
+- Do NOT submit to modelcontextprotocol/servers before PyPI is live.
+  Reviewers will check that the package installs cleanly.
+
+- The smithery.yaml `command: lanroster-mcp` assumes the user has
+  installed with pip. If they use pipx, the command is still lanroster-mcp
+  but in a different PATH location. Both work without changes.
+
+- If the PyPI name "lanroster" is already taken, use "lanroster-mcp" as
+  the package name and update pyproject.toml [project] name field,
+  the install instructions in README.md, the smithery.yaml install.pip field,
+  and the PR body in Phase 4.
+
+- Semantic versioning going forward:
+    patch (0.3.x): bug fixes, scan improvements
+    minor (0.x.0): new MCP tools, new commands
+    major (x.0.0): breaking changes to tool schemas or config format
