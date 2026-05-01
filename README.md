@@ -6,6 +6,32 @@ Track every device on your LAN by MAC address. Keep the roster in a shared git
 repository so the whole team sees the same list. Discover who's online in
 seconds, and wire the `ip` command directly into your automation scripts.
 
+```mermaid
+flowchart TD
+    subgraph REPO["☁️  Shared Git Repository"]
+        DJ["📋 devices.json<br/>router · aa:bb:cc:dd:ee:01<br/>nas-server · 00:11:32:ab:cd:ef<br/>raspberry-pi · b8:27:eb:12:34:56"]
+    end
+
+    TOOL(["⚡ lanroster<br/><br/>init · register · remove · list<br/>status · ip · watch"])
+
+    subgraph LAN["🌐  Local Network"]
+        N1["🟢 router · 192.168.1.1"]
+        N2["🟢 nas-server · 192.168.1.50"]
+        N3["🟢 raspberry-pi · 192.168.1.4"]
+        N4["⚫ laptop · offline"]
+    end
+
+    REPO <-->|"git pull / push"| TOOL
+    TOOL <-->|"ARP / nmap scan"| LAN
+
+    style TOOL fill:#6366f1,color:#fff,stroke:#4338ca,stroke-width:2px
+    style DJ fill:#f0fdf4,stroke:#16a34a,color:#15803d
+    style N1 fill:#f0fdf4,stroke:#16a34a
+    style N2 fill:#f0fdf4,stroke:#16a34a
+    style N3 fill:#f0fdf4,stroke:#16a34a
+    style N4 fill:#fef2f2,stroke:#dc2626
+```
+
 ---
 
 ## Why lanroster
