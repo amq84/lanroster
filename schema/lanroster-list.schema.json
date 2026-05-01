@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/amq84/lanroster/schema/lanroster-list.schema.json",
+  "title": "LanRoster Device List",
+  "description": "Schema for a lanroster devices.json file hosted in a device-list repository.",
+  "type": "object",
+  "required": ["devices"],
+  "additionalProperties": false,
+  "properties": {
+    "devices": {
+      "type": "array",
+      "description": "Ordered list of registered devices.",
+      "items": {
+        "$ref": "#/$defs/device"
+      }
+    }
+  },
+  "$defs": {
+    "device": {
+      "type": "object",
+      "required": ["name", "mac"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique, human-readable device identifier.",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "examples": ["raspberry-pi", "nas_server", "laptop01"]
+        },
+        "mac": {
+          "type": "string",
+          "description": "MAC address in lowercase colon-separated hex notation.",
+          "pattern": "^([0-9a-f]{2}:){5}[0-9a-f]{2}$",
+          "examples": ["b8:27:eb:12:34:56", "aa:bb:cc:dd:ee:ff"]
+        }
+      }
+    }
+  }
+}
