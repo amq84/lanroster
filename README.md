@@ -8,11 +8,13 @@ seconds, and wire the `ip` command directly into your automation scripts.
 
 ```mermaid
 flowchart TD
+    USER(["👤 User / Team Member<br/>registers devices · monitors status<br/>uses ip in automation scripts"])
+
+    TOOL(["⚡ lanroster<br/><br/>init · register · remove · list<br/>status · ip · watch"])
+
     subgraph REPO["☁️  Shared Git Repository"]
         DJ["📋 devices.json<br/>router · aa:bb:cc:dd:ee:01<br/>nas-server · 00:11:32:ab:cd:ef<br/>raspberry-pi · b8:27:eb:12:34:56"]
     end
-
-    TOOL(["⚡ lanroster<br/><br/>init · register · remove · list<br/>status · ip · watch"])
 
     subgraph LAN["🌐  Local Network"]
         N1["🟢 router · 192.168.1.1"]
@@ -21,15 +23,21 @@ flowchart TD
         N4["⚫ laptop · offline"]
     end
 
-    REPO <-->|"git pull / push"| TOOL
-    TOOL <-->|"ARP / nmap scan"| LAN
+    SCRIPT(["🤖 Automation Script<br/>ssh user@$(lanroster ip rpi)<br/>rsync · ansible · custom tooling"])
 
+    USER -->|"init · register · remove<br/>status · list · watch"| TOOL
+    TOOL <-->|"git pull / push"| REPO
+    TOOL <-->|"ARP / nmap scan"| LAN
+    TOOL -.->|"lanroster ip → IP address"| SCRIPT
+
+    style USER fill:#dbeafe,stroke:#3b82f6,color:#1e40af
     style TOOL fill:#6366f1,color:#fff,stroke:#4338ca,stroke-width:2px
     style DJ fill:#f0fdf4,stroke:#16a34a,color:#15803d
     style N1 fill:#f0fdf4,stroke:#16a34a
     style N2 fill:#f0fdf4,stroke:#16a34a
     style N3 fill:#f0fdf4,stroke:#16a34a
     style N4 fill:#fef2f2,stroke:#dc2626
+    style SCRIPT fill:#fefce8,stroke:#ca8a04,color:#713f12
 ```
 
 ---
