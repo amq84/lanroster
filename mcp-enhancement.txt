@@ -1,0 +1,239 @@
+LANROSTER — MCP SERVER ENHANCEMENT
+====================================
+Session handoff document. Read this fully before starting work.
+
+
+OBJECTIVE
+---------
+Implement an MCP (Model Context Protocol) server for lanroster so that Claude
+and other AI agents can call lanroster functionality as native tools, without
+the user needing to run CLI commands manually.
+
+The result should be a working `lanroster-mcp` command that can be registered
+in Claude Desktop's config and used immediately.
+
+
+REPOSITORY
+----------
+Remote:    git@github.com:amq84/lanroster.git
+Local:     ~/lanroster/
+Branch:    main
+Push to:   origin/main when done
+
+
+PROJECT STRUCTURE (current state)
+----------------------------------
+lanroster/
+  __init__.py        version = "0.2.0"
+  cli.py             click CLI — init, register, remove, list, status, ip, watch
+  config.py          reads/writes ~/.lanroster/config.json
+  devices.py         load/save/validate devices.json (MAC normalization, etc.)
+  git_ops.py         clone_repo(), pull_repo(), commit_and_push()
+  network.py         scan_network() → ScanResult(hosts, method, complete)
+                     get_local_ip_and_network()
+                     find_ip_by_mac(mac, result)
+                     Methods tried in order: scapy → nmap -sn → ping+arp
+  seen.py            last-seen timestamps in ~/.lanroster/seen.json
+                     update_from_scan(), get_last_seen(), relative()
+  vendor.py          OUI lookup via optional mac-vendor-lookup dep
+                     get_vendor(mac) → str, returns "—" if unavailable
+setup.py             entry_points: lanroster=lanroster.cli:main
+                     extras: [vendor], [scan], [full]
+schema/
+  lanroster-list.schema.json
+  example-devices.json
+README.md
+LICENSE (MIT, Abel Moreno <abelmqueralto@gmail.com>)
+
+
+WHAT TO BUILD
+-------------
+New file:  lanroster/mcp_server.py
+Modified:  setup.py  (new entry point + [mcp] extra)
+Modified:  README.md (new "MCP Server" section before the Maintainer section)
+
+
+FILE: lanroster/mcp_server.py
+------------------------------
+Use the official Anthropic MCP Python SDK (package: mcp).
+Transport: stdio (standard for local MCP servers).
+Pattern: async server using mcp.server.Server + mcp.server.stdio.stdio_server.
+
+Implement these 6 tools:
+
+1. list_devices
+   - No arguments.
+   - Reads roster from cfg["devices_file"] via dev_mod.load_devices().
+   - Returns JSON array: [{name, mac, vendor, last_seen}, ...]
+   - Description: "Return all registered devices from the roster."
+
+2. get_network_status
+   - Optional argument: force_refresh (bool, default false).
+   - Pulls roster repo (git pull), then scans the network.
+   - Returns JSON array: [{name, mac, vendor, online, ip, last_seen, scan_method}, ...]
+   - Calls seen_mod.update_from_scan() after scan.
+   - Description must tell the AI: use this to understand current infrastructure state.
+   - IMPORTANT: implement a 60-second in-memory scan cache keyed on (network_cidr).
+     force_refresh=true bypasses cache. Cache avoids a 10-30s ARP scan on every call.
+
+3. get_device_ip
+   - Required argument: name (string).
+   - Uses cached scan if fresh, otherwise runs a new scan.
+   - Returns JSON: {name, ip, online}  — ip is null if not reachable.
+   - Exit behavior: never raise — always return the JSON object, even on error.
+   - Description must say: "Use this before any SSH, rsync, or network operation
+     targeting a named device."
+
+4. register_device
+   - Required arguments: name (string), mac (string).
+   - Validates name (regex [A-Za-z0-9_-]+) and MAC format.
+   - Pulls repo, checks duplicates, appends to devices.json, commits and pushes.
+   - Returns JSON: {success: bool, name, mac, message}
+   - Description: "Register a new device in the shared roster and push to git.
+     Always confirm with the user before calling this tool."
+
+5. remove_device
+   - Required argument: name (string).
+   - Pulls repo, finds device, removes, commits and pushes.
+   - Returns JSON: {success: bool, name, message}
+   - Description: "Remove a device from the roster and push to git.
+     Always confirm with the user before calling this tool."
+
+6. find_unknown_devices
+   - No arguments.
+   - Runs a fresh network scan (force_refresh=true, bypass cache).
+   - Cross-references scan results against registered MACs.
+   - Returns JSON array of unregistered hosts: [{ip, mac, vendor}, ...]
+   - Description: "Scan the network and return devices present on the LAN but
+     not registered in the roster. Useful for detecting new hardware or
+     unexpected guests."
+
+Async note: network.scan_network() and git_ops functions are blocking.
+Wrap them with: await asyncio.to_thread(func, *args)
+
+Scan cache implementation:
+  _scan_cache: dict | None = None   # keys: roster, network_map, method, cidr
+  _scan_time: float = 0.0
+  _CACHE_TTL: float = 60.0
+
+  async def _get_status(force=False):
+      global _scan_cache, _scan_time
+      now = time.monotonic()
+      if not force and _scan_cache and (now - _scan_time) < _CACHE_TTL:
+          return _scan_cache
+      cfg = cfg_mod.require_config()
+      roster = dev_mod.load_devices(cfg["devices_file"])
+      _, cidr = await asyncio.to_thread(net_mod.get_local_ip_and_network)
+      result = await asyncio.to_thread(net_mod.scan_network, cidr)
+      seen_mod.update_from_scan(result.hosts)
+      network_map = {mac: ip for ip, mac in result.hosts}
+      _scan_cache = {"roster": roster, "network_map": network_map,
+                     "method": result.method, "cidr": cidr}
+      _scan_time = now
+      return _scan_cache
+
+Entry point function:
+  async def main():
+      async with stdio_server() as (read_stream, write_stream):
+          await app.run(read_stream, write_stream,
+                        app.create_initialization_options())
+
+  def serve():
+      asyncio.run(main())
+
+
+FILE: setup.py changes
+-----------------------
+Add to entry_points console_scripts:
+  "lanroster-mcp=lanroster.mcp_server:serve"
+
+Add to extras_require:
+  "mcp": ["mcp>=1.0"]
+
+Update "full" extra to include mcp:
+  "full": ["mac-vendor-lookup>=0.1.12", "scapy>=2.5", "mcp>=1.0"]
+
+Update version to "0.3.0".
+
+
+FILE: README.md changes
+------------------------
+Add a new section "## MCP Server" between the "## Local State" section and
+the "## Maintainer" section.
+
+The section should cover:
+  1. What it is (one paragraph)
+  2. Installation:
+       pip install ".[mcp]"
+  3. Claude Desktop config (code block):
+       {
+         "mcpServers": {
+           "lanroster": {
+             "command": "lanroster-mcp"
+           }
+         }
+       }
+     Config file location: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
+                           ~/.config/claude/claude_desktop_config.json (Linux)
+  4. Available tools table (name, what it does, when the AI uses it)
+  5. Example conversations (2-3 short examples showing the before/after)
+  6. Note on scan cache and the force_refresh argument
+
+
+DEPENDENCY NOTES
+-----------------
+The mcp package on PyPI is: mcp
+Install with: pip install mcp
+It requires Python 3.10+. Our project already requires 3.10+.
+The SDK provides: mcp.server.Server, mcp.server.stdio.stdio_server,
+                  mcp.types.Tool, mcp.types.TextContent, mcp.types.CallToolResult
+Import pattern used in the SDK:
+  from mcp.server import Server
+  from mcp.server.stdio import stdio_server
+  from mcp.types import Tool, TextContent, CallToolResult
+Check the actual SDK API before writing — verify exact class/function names
+by importing and inspecting, or reading mcp package source.
+
+
+TOOL DESCRIPTION QUALITY
+--------------------------
+The tool descriptions are the most important part — the AI reads them to decide
+when and how to call each tool. Write them as instructions to the AI, not as
+documentation for a human. Examples of good description patterns:
+  - "Use this before any SSH or network operation targeting a named device."
+  - "Always confirm with the user before calling this tool."
+  - "Use force_refresh=true if you suspect the cached data is stale."
+
+
+TESTING BEFORE PUSH
+--------------------
+After implementing:
+1. pip install -e ".[mcp]"
+2. Verify: lanroster-mcp --help  (or just that it runs without import errors)
+3. Test tool listing: echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | lanroster-mcp
+4. Run: lanroster --version  (should show 0.3.0)
+5. Verify README renders correctly (check mcp section exists and is well-formed)
+
+
+GIT INSTRUCTIONS
+-----------------
+Commit message should be:
+  "Add MCP server: expose lanroster as AI-native tools"
+
+Body:
+  New lanroster-mcp entry point exposes 6 MCP tools (list_devices,
+  get_network_status, get_device_ip, register_device, remove_device,
+  find_unknown_devices) via stdio transport for use with Claude Desktop
+  and other MCP-compatible AI clients.
+
+  Includes 60s scan cache to avoid repeated ARP scans, async wrappers
+  around blocking network/git calls, and structured JSON responses with
+  scan_method metadata so the AI can caveat degraded results.
+
+Push to: origin main
+
+
+MAINTAINER
+----------
+Abel Moreno <abelmqueralto@gmail.com>
+GitHub: @amq84
