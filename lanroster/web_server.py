@@ -150,6 +150,7 @@ tbody tr:last-child td { border-bottom: none; }
     <tr>
       <th style="width:28px"></th>
       <th>Device</th>
+      <th>SSH</th>
       <th>IP Address</th>
       <th>MAC Address</th>
       <th>Vendor</th>
@@ -216,6 +217,7 @@ function render(data) {
       <tr>
         <td class="dot ${d.online ? 'dot-on' : 'dot-off'}">●</td>
         <td class="dev-name">${esc(d.name)}</td>
+        <td class="dev-dim">${d.ssh_target ? `<span class="dev-ip">${esc(d.ssh_user)}</span>@${esc(d.ip)}` : (d.ssh_user ? esc(d.ssh_user) : '—')}</td>
         <td class="${d.ip ? 'dev-ip' : 'dev-dim'}">${esc(d.ip || '—')}</td>
         <td class="dev-dim">${esc(d.mac)}</td>
         <td class="dev-dim">${esc(d.vendor || '—')}</td>
@@ -291,9 +293,12 @@ def _do_scan() -> dict:
     for d in roster:
         mac = d["mac"]
         ip = network_map.get(mac)
+        ssh_user = d.get("ssh_user")
         devices.append({
             "name": d["name"],
             "mac": mac,
+            "ssh_user": ssh_user,
+            "ssh_target": f"{ssh_user}@{ip}" if ssh_user and ip else None,
             "vendor": vendor_mod.get_vendor(mac),
             "online": ip is not None,
             "ip": ip,

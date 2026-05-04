@@ -116,6 +116,10 @@ async def handle_list_tools() -> list[types.Tool]:
                         "type": "string",
                         "description": "MAC address in any standard format.",
                     },
+                    "ssh_user": {
+                        "type": "string",
+                        "description": "Optional SSH username for this device (e.g. root, pi, abel).",
+                    },
                 },
                 "required": ["name", "mac"],
             },
@@ -159,7 +163,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             return await _tool_get_device_ip(arguments.get("name", ""))
         elif name == "register_device":
             return await _tool_register_device(
-                arguments.get("name", ""), arguments.get("mac", "")
+                arguments.get("name", ""), arguments.get("mac", ""),
+                arguments.get("ssh_user"),
             )
         elif name == "remove_device":
             return await _tool_remove_device(arguments.get("name", ""))
@@ -179,6 +184,7 @@ async def _tool_list_devices() -> list[types.TextContent]:
             {
                 "name": d["name"],
                 "mac": d["mac"],
+                "ssh_user": d.get("ssh_user"),
                 "vendor": vendor_mod.get_vendor(d["mac"]),
                 "last_seen": seen_mod.get_last_seen(d["mac"]),
             }
@@ -199,6 +205,9 @@ async def _tool_get_network_status(force: bool) -> list[types.TextContent]:
             {
                 "name": d["name"],
                 "mac": d["mac"],
+                "ssh_user": d.get("ssh_user"),
+                "ssh_target": f"{d['ssh_user']}@{network_map[d['mac']]}"
+                    if d.get("ssh_user") and d["mac"] in network_map else None,
                 "vendor": vendor_mod.get_vendor(d["mac"]),
                 "online": d["mac"] in network_map,
                 "ip": network_map.get(d["mac"]),
@@ -215,14 +224,21 @@ async def _tool_get_device_ip(name: str) -> list[types.TextContent]:
         state = await _get_status(force=False)
         device = next((d for d in state["roster"] if d["name"] == name), None)
         if device is None:
-            return _text({"name": name, "ip": None, "online": False})
+            return _text({"name": name, "ip": None, "online": False, "ssh_user": None, "ssh_target": None})
         ip = state["network_map"].get(device["mac"])
-        return _text({"name": name, "ip": ip, "online": ip is not None})
+        ssh_user = device.get("ssh_user")
+        return _text({
+            "name": name,
+            "ip": ip,
+            "online": ip is not None,
+            "ssh_user": ssh_user,
+            "ssh_target": f"{ssh_user}@{ip}" if ssh_user and ip else None,
+        })
     except Exception:
-        return _text({"name": name, "ip": None, "online": False})
+        return _text({"name": name, "ip": None, "online": False, "ssh_user": None, "ssh_target": None})
 
 
-async def _tool_register_device(name: str, mac: str) -> list[types.TextContent]:
+async def _tool_register_device(name: str, mac: str, ssh_user: str | None = None) -> list[types.TextContent]:
     if not _NAME_RE.match(name):
         return _text(
             {
@@ -259,7 +275,10 @@ async def _tool_register_device(name: str, mac: str) -> list[types.TextContent]:
                     "message": f"MAC {norm_mac} is already registered as '{d['name']}'.",
                 }
             )
-    roster.append({"name": name, "mac": norm_mac})
+    entry: dict = {"name": name, "mac": norm_mac}
+    if ssh_user:
+        entry["ssh_user"] = ssh_user
+    roster.append(entry)
     dev_mod.save_devices(cfg["devices_file"], roster)
     await asyncio.to_thread(
         git_ops.commit_and_push,
@@ -272,6 +291,7 @@ async def _tool_register_device(name: str, mac: str) -> list[types.TextContent]:
             "success": True,
             "name": name,
             "mac": norm_mac,
+            "ssh_user": ssh_user,
             "message": f"Device '{name}' registered successfully.",
         }
     )

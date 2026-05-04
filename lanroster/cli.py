@@ -173,7 +173,9 @@ def init(repo_url):
 @cli.command()
 @click.argument("name")
 @click.argument("mac")
-def register(name, mac):
+@click.option("--user", "-u", default=None, metavar="USER",
+              help="SSH username for this device (e.g. root, pi, abel).")
+def register(name, mac, user):
     """Register a new device NAME with its MAC address."""
     cfg = cfg_mod.require_config()
 
@@ -203,7 +205,10 @@ def register(name, mac):
                 f"MAC {normalized} is already registered as '{d['name']}'."
             )
 
-    roster.append({"name": name, "mac": normalized})
+    entry: dict = {"name": name, "mac": normalized}
+    if user:
+        entry["ssh_user"] = user
+    roster.append(entry)
     dev_mod.save_devices(cfg["devices_file"], roster)
 
     console.print("[cyan]Committing and pushing…[/cyan]")
@@ -218,8 +223,9 @@ def register(name, mac):
 
     vendor = vendor_mod.get_vendor(normalized)
     vendor_str = f" [dim]({vendor})[/dim]" if vendor != "—" else ""
+    user_str = f" [dim]ssh_user={user}[/dim]" if user else ""
     console.print(
-        f"[bold green]✓ Registered[/bold green] [bold]{name}[/bold]{vendor_str} — [cyan]{normalized}[/cyan]"
+        f"[bold green]✓ Registered[/bold green] [bold]{name}[/bold]{vendor_str} — [cyan]{normalized}[/cyan]{user_str}"
     )
 
 
@@ -284,6 +290,7 @@ def list_devices(as_json):
             out.append({
                 "name": d["name"],
                 "mac": d["mac"],
+                "ssh_user": d.get("ssh_user"),
                 "vendor": vendor_mod.get_vendor(d["mac"]),
                 "last_seen": ts,
             })
@@ -294,6 +301,7 @@ def list_devices(as_json):
         console.print("[yellow]Roster is empty. Use 'lanroster register' to add devices.[/yellow]")
         return
 
+    has_ssh = any(d.get("ssh_user") for d in roster)
     table = Table(
         title=f"[bold]Registered Devices[/bold] [dim]({len(roster)} total)[/dim]",
         show_header=True,
@@ -304,17 +312,17 @@ def list_devices(as_json):
     table.add_column("Name", style="bold")
     table.add_column("MAC Address", style="dim")
     table.add_column("Vendor", style="dim", max_width=24)
+    if has_ssh:
+        table.add_column("SSH User", style="cyan")
     table.add_column("Last Seen", style="dim")
 
     for i, d in enumerate(roster, 1):
         ts = seen_mod.get_last_seen(d["mac"])
-        table.add_row(
-            str(i),
-            d["name"],
-            d["mac"],
-            vendor_mod.get_vendor(d["mac"]),
-            seen_mod.relative(ts) if ts else "—",
-        )
+        row = [str(i), d["name"], d["mac"], vendor_mod.get_vendor(d["mac"])]
+        if has_ssh:
+            row.append(d.get("ssh_user") or "—")
+        row.append(seen_mod.relative(ts) if ts else "—")
+        table.add_row(*row)
 
     console.print()
     console.print(table)
@@ -374,9 +382,12 @@ def status(network_cidr, as_json, pull):
             mac = d["mac"].lower()
             ip = network_map.get(mac)
             ts = seen_mod.get_last_seen(mac)
+            ssh_user = d.get("ssh_user")
             out.append({
                 "name": d["name"],
                 "mac": d["mac"],
+                "ssh_user": ssh_user,
+                "ssh_target": f"{ssh_user}@{ip}" if ssh_user and ip else None,
                 "vendor": vendor_mod.get_vendor(d["mac"]),
                 "online": ip is not None,
                 "ip": ip,
@@ -529,6 +540,48 @@ def watch(interval, network_cidr):
 
     except KeyboardInterrupt:
         console.print("\n[dim]Watch stopped.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# ssh
+# ---------------------------------------------------------------------------
+
+@cli.command("ssh")
+@click.argument("name")
+@click.option("--user", "-u", default=None, metavar="USER",
+              help="Override the stored SSH username.")
+@click.option("--network", "network_cidr", default=None, metavar="CIDR",
+              help="Override detected subnet.")
+def ssh_connect(name, user, network_cidr):
+    """Open an SSH session to device NAME.
+
+    \b
+    Example:
+        lanroster ssh riu9-rpi4b
+    """
+    import os
+
+    cfg = cfg_mod.require_config()
+    roster = dev_mod.load_devices(cfg["devices_file"])
+
+    device = next((d for d in roster if d["name"] == name), None)
+    if device is None:
+        raise click.ClickException(f"Device '{name}' not in roster.")
+
+    with console.status("[cyan]Scanning network…[/cyan]", spinner="dots"):
+        try:
+            result = _do_scan(_resolve_network(network_cidr))
+        except Exception as exc:
+            raise click.ClickException(f"Network scan failed: {exc}") from exc
+
+    ip = net_mod.find_ip_by_mac(device["mac"], result)
+    if ip is None:
+        raise click.ClickException(f"Device '{name}' is not reachable on the network.")
+
+    ssh_user = user or device.get("ssh_user")
+    target = f"{ssh_user}@{ip}" if ssh_user else ip
+    console.print(f"[dim]Connecting to[/dim] [cyan]{target}[/cyan] …")
+    os.execvp("ssh", ["ssh", target])
 
 
 # ---------------------------------------------------------------------------
