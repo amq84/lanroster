@@ -11,7 +11,8 @@ from . import network as net_mod
 from . import seen as seen_mod
 from . import vendor as vendor_mod
 
-_lock = threading.Lock()
+_lock = threading.Lock()       # guards _state reads/writes
+_scan_lock = threading.Lock()  # prevents concurrent scans
 _state: dict | None = None
 _interval_seconds: int = 30
 
@@ -251,9 +252,27 @@ async function fetchStatus() {
   }
 }
 
-function triggerRefresh() {
-  nextScanAt = Date.now() + INTERVAL_MS;
-  fetchStatus();
+async function triggerRefresh() {
+  const btn = document.querySelector('button');
+  const label = document.getElementById('countdown-label');
+  const fill = document.getElementById('progress-fill');
+  btn.disabled = true;
+  btn.textContent = '⟳ Scanning…';
+  label.textContent = 'scanning…';
+  fill.style.transition = 'none';
+  fill.style.width = '100%';
+  try {
+    const r = await fetch('/api/scan');
+    const data = await r.json();
+    nextScanAt = Date.now() + INTERVAL_MS;
+    fill.style.transition = 'width 1s linear';
+    render(data);
+  } catch(e) {
+    label.textContent = 'scan error';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Scan now';
+  }
 }
 
 function tick() {
@@ -314,9 +333,9 @@ def _do_scan() -> dict:
     }
 
 
-def _scan_loop(interval: int, stop: threading.Event) -> None:
+def _run_scan() -> dict:
     global _state
-    while not stop.is_set():
+    with _scan_lock:
         try:
             state = _do_scan()
         except Exception as exc:
@@ -328,6 +347,12 @@ def _scan_loop(interval: int, stop: threading.Event) -> None:
             }
         with _lock:
             _state = state
+        return state
+
+
+def _scan_loop(interval: int, stop: threading.Event) -> None:
+    while not stop.is_set():
+        _run_scan()
         stop.wait(interval)
 
 
@@ -340,6 +365,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_html()
         elif self.path == "/api/status":
             self._serve_json()
+        elif self.path == "/api/scan":
+            self._serve_scan()
         else:
             self.send_error(404)
 
@@ -361,6 +388,14 @@ class _Handler(BaseHTTPRequestHandler):
             }
         else:
             payload = state
+        self._write_json(payload)
+
+    def _serve_scan(self):
+        # Runs a live scan (blocks 10-30s) and returns fresh state.
+        # If another scan is already running, waits for it to finish.
+        self._write_json(_run_scan())
+
+    def _write_json(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
