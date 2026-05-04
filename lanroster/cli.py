@@ -531,5 +531,22 @@ def watch(interval, network_cidr):
         console.print("\n[dim]Watch stopped.[/dim]")
 
 
+# ---------------------------------------------------------------------------
+# web
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--port", "-p", default=5577, show_default=True, type=int,
+              help="Port to listen on.")
+@click.option("--interval", "-i", default=30, show_default=True, type=int,
+              help="Seconds between network scans.")
+@click.option("--no-browser", is_flag=True, default=False,
+              help="Don't open the browser automatically.")
+def web(port, interval, no_browser):
+    """Start a live web dashboard (lanroster watch in the browser)."""
+    from .web_server import run_web
+    run_web(port=port, interval=interval, open_browser=not no_browser)
+
+
 def main():
     cli()
