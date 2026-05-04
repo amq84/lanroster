@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="lanroster",
-    version="0.2.0",
+    version="0.3.0",
     description="Git-backed CLI to manage and monitor your network device roster",
     author="Abel Moreno",
     author_email="abelmqueralto@gmail.com",
@@ -18,11 +18,13 @@ setup(
     extras_require={
         "vendor": ["mac-vendor-lookup>=0.1.12"],
         "scan": ["scapy>=2.5"],
-        "full": ["mac-vendor-lookup>=0.1.12", "scapy>=2.5"],
+        "mcp": ["mcp>=1.0"],
+        "full": ["mac-vendor-lookup>=0.1.12", "scapy>=2.5", "mcp>=1.0"],
     },
     entry_points={
         "console_scripts": [
             "lanroster=lanroster.cli:main",
+            "lanroster-mcp=lanroster.mcp_server:serve",
         ],
     },
     classifiers=[

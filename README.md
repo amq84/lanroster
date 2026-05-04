@@ -399,6 +399,72 @@ lanroster stores two files in `~/.lanroster/`:
 
 ---
 
+## MCP Server
+
+lanroster ships an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server so
+that Claude Desktop and other AI clients can call lanroster functionality as native tools —
+no CLI commands needed. The AI can list devices, check network status, look up IPs, register
+or remove devices, and detect unknown hardware, all from a conversation.
+
+### Installation
+
+```bash
+pip install ".[mcp]"
+```
+
+### Claude Desktop configuration
+
+Add the following to your Claude Desktop config file:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux:** `~/.config/claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "lanroster": {
+      "command": "lanroster-mcp"
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. The tools will appear automatically.
+
+### Available tools
+
+| Tool | What it does | When the AI uses it |
+|---|---|---|
+| `list_devices` | Return all registered devices (no scan) | Browsing the roster without touching the network |
+| `get_network_status` | Scan the LAN and return online/offline status for every device | Checking current infrastructure state; results cached 60 s |
+| `get_device_ip` | Return the current IP of a named device | Before any SSH, rsync, or network operation |
+| `register_device` | Add a device to the roster and push to git | After confirming with the user |
+| `remove_device` | Remove a device from the roster and push to git | After confirming with the user |
+| `find_unknown_devices` | Return LAN hosts not in the roster | Detecting new hardware or unexpected guests |
+
+### Example conversations
+
+**Look up a device's IP before connecting:**
+> *"What IP is the nas-server on right now?"*
+> → Claude calls `get_device_ip` and replies: "The nas-server is at 192.168.1.50."
+
+**Check who's online:**
+> *"Which of my registered devices are currently offline?"*
+> → Claude calls `get_network_status` and lists the unreachable devices with their last-seen times.
+
+**Detect intruders:**
+> *"Are there any unknown devices on my network?"*
+> → Claude calls `find_unknown_devices` and returns a table of unregistered MAC addresses with vendors and IPs.
+
+### Scan cache
+
+Network scans take 10–30 seconds depending on the method (scapy → nmap → ping+arp).
+`get_network_status` and `get_device_ip` share a 60-second in-memory cache so repeated
+calls within the same session are instant. Pass `force_refresh: true` to `get_network_status`
+to bypass the cache and trigger a fresh scan.
+
+---
+
 ## Maintainer
 
 **Abel Moreno** — [abelmqueralto@gmail.com](mailto:abelmqueralto@gmail.com)  
